@@ -3686,27 +3686,30 @@ function updateDataChip() {
 }
 
 /* ------------------------------------------------------------ boot */
-/* Se acepta el histórico dentro de data/ o suelto en la raíz: al subirlo a mano
-   a GitHub es fácil que quede en uno u otro sitio. */
-const DATA_URLS = ["data/dataset.json.gz", "dataset.json.gz"];
+/* El histórico va en dos archivos para que ninguno rebase el límite de 25 MiB de
+   GitHub: el general y el detalle por gestor. Cada uno se acepta dentro de data/
+   o suelto en la raíz, porque al subirlos a mano es fácil que queden en cualquiera. */
+const DATA_BASE = ["data/dataset.json.gz", "dataset.json.gz"];
+const DATA_GES = ["data/dataset-gestores.json.gz", "dataset-gestores.json.gz"];
 
-async function bajarHistorico(msg) {
+async function bajarArchivo(urls, msg, etiqueta) {
   let ultimo = null;
-  for (const url of DATA_URLS) {
+  for (const url of urls) {
     try {
-      return await inflateURL(url, p => { msg.textContent = "Descargando histórico… " + p + "%"; });
+      return await inflateURL(url, p => { msg.textContent = etiqueta + "… " + p + "%"; });
     } catch (e) { ultimo = e; }
   }
-  throw ultimo || new Error("No se encontró el histórico");
+  throw ultimo || new Error("No se encontró " + urls[0]);
 }
 
 /* Puerta de contraseña de la versión publicada. Devuelve el histórico ya abierto. */
+/* Resuelve con { datos, llave }: la llave sirve para abrir el segundo archivo. */
 function pedirClave(bytes, msg) {
   return new Promise(resolve => {
     const caja = $("#claveBox"), form = $("#claveForm"), pwd = $("#clavePwd"),
           rec = $("#claveRec"), err = $("#claveErr"), btn = $("#claveBtn");
     const salt = bytes.subarray(4, 20);
-    const listo = datos => { caja.classList.remove("on"); resolve(datos); };
+    const listo = (datos, llave) => { caja.classList.remove("on"); resolve({ datos, llave }); };
 
     (async () => {
       /* si el dispositivo ya recordó la llave, se entra sin preguntar */
@@ -3715,7 +3718,7 @@ function pedirClave(bytes, msg) {
         try {
           const k = await crypto.subtle.importKey("raw", b64bytes(g), { name: "AES-GCM" },
             true, ["encrypt", "decrypt"]);
-          return listo(await descifrar(bytes, k));
+          return listo(await descifrar(bytes, k), k);
         } catch (e) { olvidarLlave(); }
       }
       $("#loader").style.display = "none";
@@ -3734,7 +3737,7 @@ function pedirClave(bytes, msg) {
         pwd.value = "";
         $("#loader").style.display = "flex";
         if (msg) msg.textContent = "Preparando tableros…";
-        listo(datos);
+        listo(datos, llave);
       } catch (e) {
         err.textContent = "Contraseña incorrecta.";
         btn.disabled = false; btn.textContent = "Abrir tablero";
@@ -3753,10 +3756,27 @@ function pedirClave(bytes, msg) {
       DB = await inflate(RAWB64);
     } else {
       msg.textContent = "Descargando histórico…";
-      let bruto = await bajarHistorico(msg);
+      let bruto = await bajarArchivo(DATA_BASE, msg, "Descargando histórico");
+      let llave = null;
       /* si viene cifrado, inflateURL devuelve los bytes tal cual y aquí se pide la clave */
-      DB = bruto instanceof Uint8Array ? await pedirClave(bruto, msg) : bruto;
+      if (bruto instanceof Uint8Array) {
+        const r = await pedirClave(bruto, msg);
+        DB = r.datos; llave = r.llave;
+      } else DB = bruto;
       bruto = null;
+
+      /* segundo archivo: detalle por gestor. Si falta, el tablero abre igual y sólo
+         se quedan sin datos las tablas y el mapa de calor por gestor. */
+      try {
+        let g = await bajarArchivo(DATA_GES, msg, "Descargando detalle por gestor");
+        if (g instanceof Uint8Array) {
+          if (!llave) throw new Error("falta la llave");
+          g = await descifrar(g, llave);
+        }
+        Object.keys(g).forEach(k => { DB[k] = g[k]; });
+      } catch (e) {
+        console.warn("Sin detalle por gestor:", e && e.message);
+      }
     }
     reindex();
     msg.textContent = "Recuperando cargas manuales…";
