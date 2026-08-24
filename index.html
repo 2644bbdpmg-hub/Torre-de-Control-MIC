@@ -958,9 +958,20 @@ function lineChart(host, cfg) {
     g += `<text x="${P.l - 8}" y="${(y + 3.5).toFixed(1)}" fill="#94a3b8" font-size="10" text-anchor="end">${fmt(v, kind)}</text>`;
   }
   const step = Math.max(1, Math.ceil(n / Math.max(4, Math.floor((W - P.l - P.r) / 27))));
+  /* La última columna siempre se rotula: si no, el eje termina en una semana
+     anterior a la última con datos y parece que la gráfica se quedó atrás. */
+  const marcas = [];
+  for (let i = 0; i < n; i += step) marcas.push(i);
+  if (marcas[marcas.length - 1] !== n - 1) {
+    if (n - 1 - marcas[marcas.length - 1] < step * 0.6) marcas.pop();   // evita encimarse
+    marcas.push(n - 1);
+  }
+  const marcado = new Set(marcas);
   xs.forEach((lb, i) => {
-    if (i % step) return;
-    g += `<text x="${X(i).toFixed(1)}" y="${H - 8}" fill="#94a3b8" font-size="10" text-anchor="middle">${lb}</text>`;
+    if (!marcado.has(i)) return;
+    const ult = i === n - 1;
+    g += `<text x="${X(i).toFixed(1)}" y="${H - 8}" fill="${ult ? "#4b5675" : "#94a3b8"}" font-size="10"
+      font-weight="${ult ? 700 : 400}" text-anchor="middle">${lb}</text>`;
   });
   if (cfg.target != null) {
     g += `<line x1="${P.l}" x2="${W - P.r}" y1="${Y(cfg.target).toFixed(1)}" y2="${Y(cfg.target).toFixed(1)}" stroke="#f59e0b" stroke-width="1.2" stroke-dasharray="5 4" opacity=".8"/>`;
@@ -1427,7 +1438,9 @@ const CFG_TGO = {
     { f: "cob_req", l: "Pago requerido", fmt: "moneyK", better: "down" },
     { f: "directa", l: "Cobranza directa", fmt: "moneyK", better: "up" },
     { f: "indirecta", l: "Cobranza indirecta", fmt: "moneyK", better: "up" },
-    { f: "p_directa", l: "% cobranza directa", fmt: "pct", better: "up" }
+    { f: "p_directa", l: "% cobranza directa", fmt: "pct", better: "up" },
+    { f: "p_riesgo", l: "Gestores con alcance < 85%", fmt: "pct", better: "down",
+      spec: [0.3, 0.45, "down"] }
   ],
   charts: [
     { t: "Cobranza real vs. meta", fmt: "moneyK", zero: true,
@@ -1438,7 +1451,8 @@ const CFG_TGO = {
       s: [{ f: "pl_real", n: "Real", type: "bar" }, { f: "pl_esp", n: "Esperada", dash: true, color: "#f59e0b" }] },
     { t: "Efectividad y eficiencia", fmt: "pct",
       s: [{ f: "efectividad", n: "Efectividad" }, { f: "eficiencia", n: "Eficiencia", color: "#7c3aed" }] },
-    { t: "Gestores por rango de alcance", fmt: "num", zero: true, totalPila: true, ds: "plan",
+    /* se cuenta desde el detalle por gestor del propio TGO, así avanza con este archivo */
+    { t: "Gestores por rango de alcance", fmt: "num", zero: true, totalPila: true,
       s: [{ f: "r80", n: "< 80%", type: "stack", color: "#e11d48" },
           { f: "r8085", n: "80% a 85%", type: "stack", color: "#f59e0b" },
           { f: "r85100", n: "85% a 100%", type: "stack", color: "#fbbf24" },
@@ -2704,19 +2718,34 @@ function parseTGO(wb, w) {
     if (x.indirecta != null) a[1] += x.indirecta;
     di.set(k, a);
   });
+  /* gestores por rango de alcance: se cuentan del propio detalle por empleado */
+  const rng = new Map();
+  em.forEach(x => {
+    if (x.cob_alc == null) return;
+    const k = [x.div, x.cua, x.reg, x.ger].join("|");
+    const b = rng.get(k) || [0, 0, 0, 0, 0];
+    b[0]++;
+    b[x.cob_alc < 0.8 ? 1 : x.cob_alc < 0.85 ? 2 : x.cob_alc < 1 ? 3 : 4]++;
+    rng.set(k, b);
+  });
   eq.forEach(x => {
-    const a = di.get([x.div, x.cua, x.reg, x.ger].join("|"));
+    const k = [x.div, x.cua, x.reg, x.ger].join("|");
+    const a = di.get(k);
     if (a) { x.directa = Math.round(a[0] * 100) / 100; x.indirecta = Math.round(a[1] * 100) / 100; }
+    const b = rng.get(k);
+    if (b) { x.alc_medible = b[0]; x.r80 = b[1]; x.r8085 = b[2]; x.r85100 = b[3]; x.r100 = b[4]; }
   });
   const agg = aggregate(eq, {
     sums: ["pl_esp","pl_real","cob_req","cob_meta","cob_real","c12","c3","c46","c79","directa",
-           "indirecta","inv_asig","inv_fin"],
+           "indirecta","inv_asig","inv_fin","alc_medible","r80","r8085","r85100","r100"],
     wmean: { cob_alc: "cob_meta", efectividad: "pl_real", eficiencia: "pl_real", pase67: "cob_meta" },
     custom: o => {
       o.pl_alc = SD(o.pl_real, o.pl_esp); o.cob_cump = SD(o.cob_real, o.cob_meta);
       o.cob_plan = SD(o.cob_meta, o.cob_req); o.mix79 = SD(o.c79 || 0, o.cob_real);
       const tot = (o.directa || 0) + (o.indirecta || 0);
       o.p_directa = tot ? Math.round((o.directa || 0) / tot * 1e4) / 1e4 : null;
+      o.p_riesgo = o.alc_medible
+        ? Math.round(((o.r80 || 0) + (o.r8085 || 0)) / o.alc_medible * 1e4) / 1e4 : null;
     }, fields: FIELDS("tgo")
   });
   const gi = IX.tgo_g;
