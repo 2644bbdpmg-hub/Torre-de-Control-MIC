@@ -520,7 +520,10 @@ const guardarLlave = async llave => {
 const olvidarLlave = () => { try { localStorage.removeItem(KEYSTORE); } catch (e) {} };
 
 async function inflateURL(url, avisa) {
-  const r = await fetch(url);
+  /* no-cache obliga a revalidar con el servidor: si el archivo no cambió responde
+     304 y se usa la copia local; si cambió, baja el nuevo. Sin esto el navegador
+     puede seguir mostrando el histórico anterior durante horas. */
+  const r = await fetch(url, { cache: "no-cache" });
   if (!r.ok) throw new Error("No se encontró el histórico (" + url + "): " + r.status);
   const total = +(r.headers.get("content-length") || 0);
   let bytes;
