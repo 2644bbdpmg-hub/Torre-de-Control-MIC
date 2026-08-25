@@ -3520,9 +3520,15 @@ async function saveProgress() {
     : `Avances Torre de Control S${weeks[0]}-S${weeks[weeks.length - 1]} ${stamp}.neza`;
   downloadBlob(body, nombre, ext === "avances" ? "application/octet-stream" : "text/plain");
   try { await idbPut("chunks", STORED); await idbPut("geo", GEO); IDB_OK = true; } catch (e) { IDB_OK = false; }
-  toast(ext === "avances"
-    ? "avances.enc listo (cifrado) · súbelo al repositorio para verlo en todos tus equipos"
-    : "Avances guardados: " + STORED.length + " bloques de " + weeks.length + " semana(s)", 4500);
+  if (ext === "avances") {
+    toast("avances.enc listo · cifrado · súbelo al repositorio para verlo en todos tus equipos", 5000);
+  } else if (typeof RAWB64 === "string") {
+    toast("Avances guardados (" + weeks.length + " semana[s]). Este archivo NO va cifrado: sirve para " +
+      "pasarlo entre tus navegadores, pero no lo subas al repositorio.", 7000);
+  } else {
+    toast("Avances guardados sin cifrar. Para el archivo compartido, vuelve a abrir el tablero, " +
+      "escribe la contraseña y marca «Recordar en este dispositivo».", 7000);
+  }
 }
 
 /* acepta tanto el .neza de texto como el .enc cifrado */
