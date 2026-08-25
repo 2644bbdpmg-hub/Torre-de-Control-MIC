@@ -3653,7 +3653,7 @@ function buildWeekSelector() {
   $("#semLabel").textContent = weeksLabel();
   $("#subtitle").textContent = weeksLabel() + " · " + ALLWEEKS.length +
     " semanas de historia · datos al " + DB.meta.gen +
-    (AV_INFO ? " · avances compartidos S" + AV_INFO.semanas.join(", S") : "");
+    (AV_INFO && AV_INFO.semanas ? " · avances compartidos S" + AV_INFO.semanas.join(", S") : "");
 }
 
 function drawWeekPanel() {
@@ -3686,7 +3686,7 @@ function applyWeeks() {
   $("#semLabel").textContent = weeksLabel();
   $("#subtitle").textContent = weeksLabel() + " · " + ALLWEEKS.length +
     " semanas de historia · datos al " + DB.meta.gen +
-    (AV_INFO ? " · avances compartidos S" + AV_INFO.semanas.join(", S") : "");
+    (AV_INFO && AV_INFO.semanas ? " · avances compartidos S" + AV_INFO.semanas.join(", S") : "");
   $("#semPop").classList.remove("on");
   render(); updateDataChip();
 }
@@ -3864,12 +3864,14 @@ const DATA_AV = ["data/avances.enc", "avances.enc"];
 /* Lee el archivo de avances publicado y lo mezcla. Va antes de loadStored() para
    que lo que cada quien tenga cargado en su propio equipo siga mandando. */
 async function aplicarAvances(msg, llave) {
+  let hayArchivo = false;
   try {
     const b = await bajarArchivo(DATA_AV, msg, "Buscando avances compartidos");
+    hayArchivo = true;
     let txt;
     if (b instanceof Uint8Array) {
       if (esCifrado(b)) {
-        if (!llave) return null;
+        if (!llave) return { error: "no hay contraseña en este equipo" };
         txt = await descifrarTexto(b, llave);
       } else txt = new TextDecoder().decode(b);
     } else return null;
@@ -3886,7 +3888,8 @@ async function aplicarAvances(msg, llave) {
     return { semanas: Array.from(new Set(ch.map(c => c.week))).sort((a, b) => a - b),
              fecha: (p.saved || "").slice(0, 10) };
   } catch (e) {
-    return null;                 // que no haya avances publicados es lo normal
+    /* que no exista el archivo es lo normal; que exista y no se pueda abrir, no */
+    return hayArchivo ? { error: "se generó con otra versión del tablero" } : null;
   }
 }
 
@@ -3985,6 +3988,11 @@ function pedirClave(bytes, msg) {
     LLAVE_ACT = llave;
     msg.textContent = "Buscando avances compartidos…";
     AV_INFO = await aplicarAvances(msg, llave);
+    if (AV_INFO && AV_INFO.error) {
+      /* el archivo está publicado pero no se pudo aplicar: hay que avisarlo */
+      setTimeout(() => toast("No se pudo leer avances.enc: " + AV_INFO.error +
+        ". Vuelve a exportarlo desde el equipo donde cargaste las semanas.", 9000), 1200);
+    }
     msg.textContent = "Recuperando cargas manuales…";
     await loadStored();
     reindex();
