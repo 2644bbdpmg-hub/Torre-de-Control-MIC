@@ -355,6 +355,8 @@ tbody tr.clickable{cursor:pointer}
     </div>
     <button class="hbtn primary" id="btnUpload">＋ Cargar archivos</button>
     <button class="hbtn" id="btnSave" title="Descarga un archivo con todo lo que has cargado">💾 Guardar avances</button>
+    <button class="hbtn" id="btnRefrescar"
+      title="Vuelve a bajar el histórico publicado, saltándose la copia guardada del navegador">⟳ Actualizar</button>
     <button class="hbtn" id="btnPdf" title="Imprimir o guardar como PDF la vista actual">🖨 PDF</button>
     <button class="hbtn" id="btnExport" title="Exportar la tabla actual a CSV">CSV</button>
   </div>
@@ -524,11 +526,44 @@ const guardarLlave = async llave => {
 };
 const olvidarLlave = () => { try { localStorage.removeItem(KEYSTORE); } catch (e) {} };
 
+/* llave con la que se abrió el tablero, para reutilizarla al guardar avances */
+async function llaveActual() {
+  const g = llaveGuardada();
+  if (!g) return null;
+  try {
+    return await crypto.subtle.importKey("raw", b64bytes(g), { name: "AES-GCM" },
+      true, ["encrypt", "decrypt"]);
+  } catch (e) { return null; }
+}
+/* mismo formato que el histórico: "ENC1" | salt(16) | iv(12) | texto cifrado.
+   El salt sólo viaja para que el archivo sea autodescriptivo; la llave ya está hecha. */
+async function cifrarTexto(txt, llave) {
+  const gz = new Uint8Array(await new Response(
+    new Blob([new TextEncoder().encode(txt)]).stream()
+      .pipeThrough(new CompressionStream("gzip"))).arrayBuffer());
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, llave, gz));
+  const out = new Uint8Array(4 + 16 + 12 + ct.length);
+  out.set(ENC_MAGIC, 0);
+  out.set(crypto.getRandomValues(new Uint8Array(16)), 4);
+  out.set(iv, 20); out.set(ct, 32);
+  return out;
+}
+async function descifrarTexto(bytes, llave) {
+  const iv = bytes.subarray(20, 32), ct = bytes.subarray(32);
+  const gz = new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv }, llave, ct));
+  return await new Response(new Blob([gz]).stream()
+    .pipeThrough(new DecompressionStream("gzip"))).text();
+}
+
+/* "reload" ignora por completo la copia guardada; "no-cache" sólo la revalida */
+let MODO_CACHE = "no-cache";
+
 async function inflateURL(url, avisa) {
   /* no-cache obliga a revalidar con el servidor: si el archivo no cambió responde
      304 y se usa la copia local; si cambió, baja el nuevo. Sin esto el navegador
      puede seguir mostrando el histórico anterior durante horas. */
-  const r = await fetch(url, { cache: "no-cache" });
+  const r = await fetch(url, { cache: MODO_CACHE });
   if (!r.ok) throw new Error("No se encontró el histórico (" + url + "): " + r.status);
   const total = +(r.headers.get("content-length") || 0);
   let bytes;
@@ -3466,14 +3501,38 @@ async function saveProgress() {
   }
   const payload = JSON.stringify({ v: 1, saved: new Date().toISOString(), geo: GEO,
                                    dates: DB.dates || [], chunks: STORED });
-  const gz = await gzipToB64(payload);
-  const body = gz ? "NEZA1\n" + gz : "NEZA0\n" + payload;
+  /* Si el tablero se abrió con contraseña, el archivo sale cifrado: así se puede
+     subir al repositorio sin exponer nada. Si no hay llave, sale como antes. */
+  let body, ext = "neza";
+  const llave = await llaveActual();
+  if (llave) {
+    body = await cifrarTexto(payload, llave);
+    ext = "avances";
+  } else {
+    const gz = await gzipToB64(payload);
+    body = gz ? "NEZA1\n" + gz : "NEZA0\n" + payload;
+  }
   const weeks = Array.from(new Set(STORED.map(c => c.week))).sort((a, b) => a - b);
   const d = new Date();
   const stamp = d.getFullYear() + String(d.getMonth() + 1).padStart(2, "0") + String(d.getDate()).padStart(2, "0");
-  downloadBlob(body, `Avances Torre de Control S${weeks[0]}-S${weeks[weeks.length - 1]} ${stamp}.neza`, "text/plain");
+  const nombre = ext === "avances"
+    ? "avances.enc"      /* nombre fijo: es el que la app busca en el sitio */
+    : `Avances Torre de Control S${weeks[0]}-S${weeks[weeks.length - 1]} ${stamp}.neza`;
+  downloadBlob(body, nombre, ext === "avances" ? "application/octet-stream" : "text/plain");
   try { await idbPut("chunks", STORED); await idbPut("geo", GEO); IDB_OK = true; } catch (e) { IDB_OK = false; }
-  toast("Avances guardados: " + STORED.length + " bloques de " + weeks.length + " semana(s)");
+  toast(ext === "avances"
+    ? "avances.enc listo (cifrado) · súbelo al repositorio para verlo en todos tus equipos"
+    : "Avances guardados: " + STORED.length + " bloques de " + weeks.length + " semana(s)", 4500);
+}
+
+/* acepta tanto el .neza de texto como el .enc cifrado */
+async function restoreProgressBytes(bytes) {
+  if (esCifrado(bytes)) {
+    const llave = await llaveActual();
+    if (!llave) throw new Error("Este archivo está cifrado y no hay contraseña en este equipo");
+    return restoreProgress(await descifrarTexto(bytes, llave));
+  }
+  return restoreProgress(new TextDecoder().decode(bytes));
 }
 
 async function restoreProgress(text) {
@@ -3524,8 +3583,8 @@ function initUpload() {
       list.prepend(row);
       const tag = $(".tag", row);
       try {
-        if (/\.neza$/i.test(f.name)) {
-          const chunks = await restoreProgress(await f.text());
+        if (/\.(neza|enc|avances)$/i.test(f.name)) {
+          const chunks = await restoreProgressBytes(new Uint8Array(await f.arrayBuffer()));
           const wks = Array.from(new Set(chunks.map(c => c.week))).sort((a, b) => a - b);
           tag.className = "tag ok";
           tag.textContent = "Avances restaurados · S" + wks.join(", S");
@@ -3587,7 +3646,8 @@ function buildWeekSelector() {
   drawWeekPanel();
   $("#semLabel").textContent = weeksLabel();
   $("#subtitle").textContent = weeksLabel() + " · " + ALLWEEKS.length +
-    " semanas de historia · datos al " + DB.meta.gen;
+    " semanas de historia · datos al " + DB.meta.gen +
+    (AV_INFO ? " · avances compartidos S" + AV_INFO.semanas.join(", S") : "");
 }
 
 function drawWeekPanel() {
@@ -3619,7 +3679,8 @@ function applyWeeks() {
   ST.sem = ST.weeks[ST.weeks.length - 1];
   $("#semLabel").textContent = weeksLabel();
   $("#subtitle").textContent = weeksLabel() + " · " + ALLWEEKS.length +
-    " semanas de historia · datos al " + DB.meta.gen;
+    " semanas de historia · datos al " + DB.meta.gen +
+    (AV_INFO ? " · avances compartidos S" + AV_INFO.semanas.join(", S") : "");
   $("#semPop").classList.remove("on");
   render(); updateDataChip();
 }
@@ -3724,6 +3785,49 @@ function pintarAviso() {
   $("#staleUp", bar).onclick = () => $("#upModal").classList.add("on");
 }
 
+/* Vuelve a bajar el histórico ignorando la copia del navegador. Sirve sobre todo
+   en el celular, donde la app de la pantalla de inicio guarda su propio caché y
+   no hay forma cómoda de forzar una recarga. */
+async function refrescarHistorico(btn) {
+  const txt = btn.textContent;
+  btn.disabled = true; btn.textContent = "⟳ Actualizando…";
+  const antes = DB.meta && DB.meta.gen;
+  try {
+    MODO_CACHE = "reload";
+    const msg = { set textContent(v) { btn.textContent = "⟳ " + v; } };
+    let bruto = await bajarArchivo(DATA_BASE, msg, "Bajando");
+    let datos, llave = null;
+    if (bruto instanceof Uint8Array) {
+      const g = llaveGuardada();
+      if (!g) { toast("Vuelve a abrir el tablero para escribir la contraseña."); return; }
+      llave = await crypto.subtle.importKey("raw", b64bytes(g), { name: "AES-GCM" },
+        true, ["encrypt", "decrypt"]);
+      datos = await descifrar(bruto, llave);
+    } else datos = bruto;
+    for (const [urls, etq] of [[DATA_RANK, "Bajando Rank"], [DATA_GES, "Bajando gestores"]]) {
+      try {
+        let g2 = await bajarArchivo(urls, msg, etq);
+        if (g2 instanceof Uint8Array) g2 = await descifrar(g2, llave);
+        Object.keys(g2).forEach(k => { datos[k] = g2[k]; });
+      } catch (e) { console.warn("sin " + etq + ":", e && e.message); }
+    }
+    DB = datos;
+    reindex();
+    await loadStored();
+    reindex();
+    buildWeekSelector(); buildFilterOptions(); updateDataChip(); render();
+    const ahora = DB.meta && DB.meta.gen;
+    toast(ahora && ahora !== antes
+      ? "Actualizado · datos al " + ahora
+      : "Ya tenías la versión más reciente (datos al " + (ahora || "—") + ")", 3800);
+  } catch (e) {
+    toast("No se pudo actualizar: " + (e && e.message || e), 4200);
+  } finally {
+    MODO_CACHE = "no-cache";
+    btn.disabled = false; btn.textContent = txt;
+  }
+}
+
 function updateDataChip() {
   pintarAviso();
   const n = STORED.length;
@@ -3743,8 +3847,42 @@ function updateDataChip() {
 /* El histórico va en dos archivos para que ninguno rebase el límite de 25 MiB de
    GitHub: el general y el detalle por gestor. Cada uno se acepta dentro de data/
    o suelto en la raíz, porque al subirlos a mano es fácil que queden en cualquiera. */
+let AV_INFO = null;      // avances compartidos que se aplicaron al abrir
+let LLAVE_ACT = null;    // llave con la que se abrió el histórico
 const DATA_BASE = ["data/dataset.json.gz", "dataset.json.gz"];
+const DATA_RANK = ["data/dataset-rank.json.gz", "dataset-rank.json.gz"];
 const DATA_GES = ["data/dataset-gestores.json.gz", "dataset-gestores.json.gz"];
+/* avances compartidos: lo que alguien cargó, exportó y subió al repositorio */
+const DATA_AV = ["data/avances.enc", "avances.enc"];
+
+/* Lee el archivo de avances publicado y lo mezcla. Va antes de loadStored() para
+   que lo que cada quien tenga cargado en su propio equipo siga mandando. */
+async function aplicarAvances(msg, llave) {
+  try {
+    const b = await bajarArchivo(DATA_AV, msg, "Buscando avances compartidos");
+    let txt;
+    if (b instanceof Uint8Array) {
+      if (esCifrado(b)) {
+        if (!llave) return null;
+        txt = await descifrarTexto(b, llave);
+      } else txt = new TextDecoder().decode(b);
+    } else return null;
+    let json = txt;
+    if (!txt.trimStart().startsWith("{")) {
+      const nl = txt.indexOf("\n");
+      json = txt.slice(0, nl).trim() === "NEZA1" ? await ungzipFromB64(txt.slice(nl + 1).trim())
+                                                 : txt.slice(nl + 1);
+    }
+    const p = JSON.parse(json);
+    if (!p.chunks || !p.chunks.length) return null;
+    const ch = remapChunks(p.chunks, p.geo, p.dates);
+    mergeChunks(filtrarIncompatibles(ch));
+    return { semanas: Array.from(new Set(ch.map(c => c.week))).sort((a, b) => a - b),
+             fecha: (p.saved || "").slice(0, 10) };
+  } catch (e) {
+    return null;                 // que no haya avances publicados es lo normal
+  }
+}
 
 async function bajarArchivo(urls, msg, etiqueta) {
   let ultimo = null;
@@ -3804,6 +3942,7 @@ function pedirClave(bytes, msg) {
 
 (async function boot() {
   const msg = $("#loader .msg");
+  let llave = null;
   try {
     if (typeof RAWB64 === "string") {
       msg.textContent = "Descomprimiendo histórico…";
@@ -3811,7 +3950,6 @@ function pedirClave(bytes, msg) {
     } else {
       msg.textContent = "Descargando histórico…";
       let bruto = await bajarArchivo(DATA_BASE, msg, "Descargando histórico");
-      let llave = null;
       /* si viene cifrado, inflateURL devuelve los bytes tal cual y aquí se pide la clave */
       if (bruto instanceof Uint8Array) {
         const r = await pedirClave(bruto, msg);
@@ -3819,20 +3957,28 @@ function pedirClave(bytes, msg) {
       } else DB = bruto;
       bruto = null;
 
-      /* segundo archivo: detalle por gestor. Si falta, el tablero abre igual y sólo
-         se quedan sin datos las tablas y el mapa de calor por gestor. */
-      try {
-        let g = await bajarArchivo(DATA_GES, msg, "Descargando detalle por gestor");
-        if (g instanceof Uint8Array) {
-          if (!llave) throw new Error("falta la llave");
-          g = await descifrar(g, llave);
+      /* El resto del histórico va en archivos aparte para que ninguno rebase el
+         límite de GitHub. Si alguno falta, el tablero abre igual y sólo se queda
+         sin esa parte. */
+      const extras = [[DATA_RANK, "Descargando Rank", "Rank"],
+                      [DATA_GES, "Descargando detalle por gestor", "detalle por gestor"]];
+      for (const [urls, etiqueta, nombre] of extras) {
+        try {
+          let g = await bajarArchivo(urls, msg, etiqueta);
+          if (g instanceof Uint8Array) {
+            if (!llave) throw new Error("falta la llave");
+            g = await descifrar(g, llave);
+          }
+          Object.keys(g).forEach(k => { DB[k] = g[k]; });
+        } catch (e) {
+          console.warn("Sin " + nombre + ":", e && e.message);
         }
-        Object.keys(g).forEach(k => { DB[k] = g[k]; });
-      } catch (e) {
-        console.warn("Sin detalle por gestor:", e && e.message);
       }
     }
     reindex();
+    LLAVE_ACT = llave;
+    msg.textContent = "Buscando avances compartidos…";
+    AV_INFO = await aplicarAvances(msg, llave);
     msg.textContent = "Recuperando cargas manuales…";
     await loadStored();
     reindex();
@@ -3842,6 +3988,12 @@ function pedirClave(bytes, msg) {
     initWeekUI();
     initFilters();
     initUpload();
+    const bref = $("#btnRefrescar");
+    if (bref) {
+      /* sólo tiene sentido en la versión publicada; en la de un solo archivo se oculta */
+      if (typeof RAWB64 === "string") bref.style.display = "none";
+      else bref.onclick = () => refrescarHistorico(bref);
+    }
     updateDataChip();
     render();
     $("#loader").style.display = "none";
