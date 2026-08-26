@@ -142,6 +142,25 @@ main{padding:20px 22px 60px;max-width:1760px;margin:0 auto}
 .chartbox .head h4{margin:0;font-size:13px;font-weight:650}
 .legend{display:flex;gap:13px;flex-wrap:wrap;font-size:11px;color:var(--txt2);margin-left:auto}
 .legend i{width:9px;height:9px;border-radius:2px;display:inline-block;margin-right:5px}
+.legend .lgi{cursor:pointer;user-select:none;border-radius:6px;padding:2px 6px;margin:-2px -6px;
+  transition:.12s}
+.legend .lgi:hover{background:var(--panel2)}
+.legend .lgi.off{opacity:.4;text-decoration:line-through}
+.legend .lgi.off i{background:#c3cad8 !important}
+
+/* ---------- tarjetas de Rank ---------- */
+.card.rkc{padding:13px 15px 9px;border-top:0}
+.card.rkc::before{content:"";position:absolute;inset:0 0 auto 0;height:5px;background:var(--rk)}
+.card.rkc .rk-t{font-size:13.5px;font-weight:700;margin-top:3px;line-height:1.25}
+.card.rkc .rk-p{font-size:11px;color:var(--txt3);margin-top:2px}
+.card.rkc .rk-r{display:flex;align-items:flex-end;justify-content:space-between;gap:10px;margin-top:10px}
+.card.rkc .rk-pos{font-size:26px;font-weight:700;letter-spacing:-.8px;line-height:1}
+.card.rkc .rk-pos span{font-size:13px;font-weight:600;color:var(--txt3);letter-spacing:0}
+.card.rkc .rk-v{text-align:right;font-size:18px;font-weight:700;line-height:1.15}
+.card.rkc .rk-v span{display:block;font-size:11px;font-weight:400;color:var(--txt3)}
+.rk-leg{display:flex;gap:16px;flex-wrap:wrap;font-size:11.5px;color:var(--txt2);
+  padding:9px 3px 0}
+.rk-leg i{width:10px;height:10px;border-radius:3px;display:inline-block;margin-right:6px}
 
 /* ---------- mapa de calor ---------- */
 .heatwrap{max-height:none}
@@ -149,6 +168,9 @@ table.heat{border-collapse:separate;border-spacing:0;width:100%;font-size:11.5px
 table.heat th{position:sticky;top:0;background:#f4f6fb;color:var(--txt2);text-align:center;
   padding:7px 6px;font-weight:700;font-size:10.5px;letter-spacing:.4px;
   border-bottom:1px solid var(--line);white-space:nowrap;z-index:2}
+table.heat th.ord{cursor:pointer;user-select:none;transition:.12s}
+table.heat th.ord:hover{background:#e8edf7;color:var(--txt)}
+table.heat th.ord.act{color:var(--tab);background:#eef2ff}
 table.heat th.hn,table.heat td.hn{text-align:left;position:sticky;left:0;background:#fff;
   z-index:3;min-width:190px;max-width:260px;border-right:1px solid var(--line)}
 table.heat th.hn{background:#f4f6fb;z-index:4}
@@ -992,7 +1014,12 @@ function lineChart(host, cfg) {
   let mn = esc.mn, mx = esc.mx;
   const paso = esc.paso;
   const X = i => P.l + (n === 1 ? (W - P.l - P.r) / 2 : i * (W - P.l - P.r) / (n - 1));
-  const Y = v => P.t + (1 - (v - mn) / (mx - mn)) * (H - P.t - P.b);
+  /* invert: para posiciones de ranking, donde el 1 es el mejor y va arriba */
+  const Y = v => {
+    const t = (v - mn) / (mx - mn);
+    return P.t + (cfg.invert ? t : 1 - t) * (H - P.t - P.b);
+  };
+  const BASE = cfg.invert ? P.t : H - P.b;      // de dónde cuelga el relleno
   let g = `<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" style="display:block">`;
   const nTicks = Math.max(2, Math.min(8, Math.round((mx - mn) / paso)));
   for (let i = 0; i <= nTicks; i++) {
@@ -1127,9 +1154,9 @@ function lineChart(host, cfg) {
     if (s.fill) {
       const pts = s.values.map((v, i) => v == null ? null : [X(i), Y(v)]).filter(Boolean);
       if (pts.length) {
-        area = `M${pts[0][0].toFixed(1)},${(H - P.b).toFixed(1)}` +
+        area = `M${pts[0][0].toFixed(1)},${BASE.toFixed(1)}` +
           pts.map(p => `L${p[0].toFixed(1)},${p[1].toFixed(1)}`).join("") +
-          `L${pts[pts.length - 1][0].toFixed(1)},${(H - P.b).toFixed(1)}Z`;
+          `L${pts[pts.length - 1][0].toFixed(1)},${BASE.toFixed(1)}Z`;
         g += `<path d="${area}" fill="${col}" opacity=".08"/>`;
       }
     }
@@ -1250,9 +1277,15 @@ function heatmap(host, def) {
       <td class="hp">${p == null ? "—" : fmt(p, fmt_)}</td></tr>`;
   }).join("");
 
+  /* encabezados ordenables: cada semana y el promedio */
+  const ord = def.orden || {};
+  const flecha = c => ord.col === c ? (ord.dir === -1 ? " ▼" : " ▲") : "";
+  const clase = c => "ord" + (ord.col === c ? " act" : "");
   host.innerHTML = `<div class="tscroll heatwrap"><table class="heat">
       <thead><tr><th class="hn">${esc(def.titFila || "")}</th>
-        ${W.map(w => `<th>S${w}</th>`).join("")}<th class="hp">Prom.</th></tr></thead>
+        ${W.map((w, i) => `<th class="${clase(i)}" data-c="${i}"
+          title="Ordenar por la semana ${w}">S${w}${flecha(i)}</th>`).join("")}
+        <th class="hp ${clase("prom")}" data-c="prom" title="Ordenar por el promedio">Prom.${flecha("prom")}</th></tr></thead>
       <tbody>${filas}</tbody></table></div>
     <div class="heatleg">
       <span>${esc(def.etqBajo || "Peor")}</span>
@@ -1261,6 +1294,10 @@ function heatmap(host, def) {
       <span class="hnota">${esc(def.nota || "")}</span>
     </div>`;
   if (def.onRow) $$("tbody tr.clickable", host).forEach(tr => tr.onclick = () => def.onRow(tr.dataset.n));
+  if (def.onOrden) $$("thead th.ord", host).forEach(th => th.onclick = () => {
+    const c = th.dataset.c === "prom" ? "prom" : +th.dataset.c;
+    def.onOrden(c);
+  });
 }
 
 function renderTable(host, def) {
@@ -1380,9 +1417,28 @@ function sectionTitle(txt, hint, extra) {
 function chartBox(title, legend) {
   const b = el("div", "chartbox");
   b.innerHTML = `<div class="head"><h4>${esc(title)}</h4><div class="legend">${legend || ""}</div></div><div class="plot"></div>`;
+  activarLeyenda(b);
   return b;
 }
-const lg = (name, col) => `<span><i style="background:${col}"></i>${esc(name)}</span>`;
+const lg = (name, col, i) =>
+  `<span class="lgi" data-s="${i == null ? "" : i}" title="Clic para ocultar o mostrar esta serie"><i style="background:${col}"></i>${esc(name)}</span>`;
+
+/* Clic en la leyenda para ocultar una serie y quedarse sólo con la otra.
+   El estado vive en el propio recuadro, así que se conserva al redibujar. */
+function activarLeyenda(box) {
+  box._ocultas = box._ocultas || new Set();
+  $$(".legend .lgi", box).forEach(sp => {
+    const i = sp.dataset.s;
+    if (i === "") return;
+    sp.onclick = () => {
+      const k = +i;
+      if (box._ocultas.has(k)) box._ocultas.delete(k); else box._ocultas.add(k);
+      sp.classList.toggle("off", box._ocultas.has(k));
+      if (box._draw) box._draw();
+    };
+    sp.classList.toggle("off", box._ocultas.has(+i));
+  });
+}
 
 </script>
 <script>
@@ -1824,6 +1880,123 @@ const CFGBY = {}; INDICATORS.forEach(c => CFGBY[c.id] = c);
 /* ====================================================================== */
 /*  Render genérico de una pestaña de indicador                            */
 /* ====================================================================== */
+/* ---------------------------------------------------------------- RANK · tarjetas
+   Un recuadro por subindicador con su peso, la posición dentro del nivel y la
+   minigráfica de su tendencia. Los pesos son los del modelo de puntaje. */
+const RANK_SUBS = [
+  { f: "res",   l: "Reservas vs. cartera",  peso: 0.20, fmt: "pct",  plan: "res_plan",  mejor: "down" },
+  { f: "rot",   l: "Tend. rotación 1ª línea", peso: 0.05, fmt: "pct", plan: "rot_plan", mejor: "down" },
+  { f: "cob",   l: "Cobranza GIC",          peso: 0.25, fmt: "pct",  campo: "cob_cump", plan: null, meta: 1, mejor: "up" },
+  { f: "pase",  l: "Pase 6 a 7",            peso: 0.05, fmt: "pct",  plan: "pase_plan", mejor: "down" },
+  { f: "imp",   l: "% gestores improductivos", peso: 0.10, fmt: "pct", plan: "imp_plan", mejor: "down" },
+  { f: "cobt",  l: "Cobranza GCV",          peso: null, fmt: "pct",  campo: "cobt_vs",  plan: "cobt_plan", planFmt: "money", mejor: "up" },
+  { f: "g79",   l: "% gestión 7 a 13",      peso: 0.15, fmt: "pct",  plan: "g79_plan",  mejor: "up" },
+  { f: "p1314", l: "Pase 13 a 14",          peso: 0.20, fmt: "pct",  plan: "p1314_plan", mejor: "down" }
+];
+
+/* cuántas entidades compiten en este nivel y semana */
+function rankTotal(lvl, sem) {
+  const ci = IX.rank, campo = ci[levelField(lvl)];
+  const v = new Set();
+  DB.rank.rows.forEach(r => {
+    if (r[ci.sem] !== sem || r[ci.lvl] !== lvl || !rankFilter(r, ci)) return;
+    if (r[ci.rank] != null) v.add(r[campo]);
+  });
+  return v.size;
+}
+
+/* posición acumulada: se promedia el puntaje de cada entidad hasta esa semana y se reordena */
+function rankAcumulado(lvl, semanas) {
+  const ci = IX.rank, campo = ci[levelField(lvl)];
+  const mio = geoIdxNivel(lvl);
+  const suma = new Map(), n = new Map();
+  const out = [];
+  semanas.forEach(sem => {
+    DB.rank.rows.forEach(r => {
+      if (r[ci.sem] !== sem || r[ci.lvl] !== lvl || !rankFilter(r, ci)) return;
+      const p = r[ci.puntaje];
+      if (p == null) return;
+      const k = r[campo];
+      suma.set(k, (suma.get(k) || 0) + p); n.set(k, (n.get(k) || 0) + 1);
+    });
+    const prom = Array.from(suma.keys()).map(k => [k, suma.get(k) / n.get(k)])
+      .sort((a, b) => b[1] - a[1]);
+    const i = prom.findIndex(x => x[0] === mio);
+    out.push(i < 0 ? null : i + 1);
+  });
+  return out;
+}
+
+/* índice geográfico de lo que está filtrado, en el nivel dado */
+function geoIdxNivel(lvl) {
+  const nom = [null, ST.div, ST.cua, ST.reg, ST.ger][lvl];
+  return nom ? gidx(nom) : -1;
+}
+
+function renderRankTarjetas(pane, cfg, extra) {
+  const lvl = selLvl();
+  if (lvl === 0) return;                       // a nivel nacional no hay posición
+  const ci = IX.rank, sem = Math.max(...selWeeks());
+  const fila = rowsSel("rank", lvl, extra)[0];
+  if (!fila) return;
+  const total = rankTotal(lvl, sem);
+  if (!total) return;
+
+  pane.appendChild(sectionTitle("Indicadores · " + weeksLabel().toLowerCase(),
+    "Posición de cada indicador entre " + total + " " +
+    ["", "divisiones", "cuarteles", "regiones", "gerencias"][lvl] + " · el color marca el tercio"));
+
+  const g = el("div", "grid g4");
+  RANK_SUBS.forEach(sub => {
+    const campo = sub.campo || (sub.f + "_real");
+    const v = val("rank", fila, campo);
+    const pos = val("rank", fila, sub.f + "_rank");
+    const card = el("div", "card rkc");
+    const tercio = pos == null ? null : pos <= total / 3 ? "alto" : pos <= total * 2 / 3 ? "medio" : "bajo";
+    const col = tercio === "alto" ? "#059669" : tercio === "medio" ? "#d97706" : tercio === "bajo" ? "#e11d48" : "#94a3b8";
+    card.style.setProperty("--rk", col);
+    const serie = seriesFiltered("rank", campo, extra);
+    const plan = sub.plan ? val("rank", fila, sub.plan) : (sub.meta != null ? sub.meta : null);
+    const planTxt = plan == null ? "" :
+      (sub.plan ? "plan " : "meta ") + fmt(plan, sub.planFmt || sub.fmt);
+    card.innerHTML = `
+      <div class="rk-t">${esc(sub.l)}</div>
+      <div class="rk-p">${sub.peso != null ? "Peso " + Math.round(sub.peso * 100) + "%" : "Peso informativo"}</div>
+      <div class="rk-r">
+        <div class="rk-pos">${pos == null ? "—" : "#" + fmt(pos, "num")}<span>/${total}</span></div>
+        <div class="rk-v">${fmt(v, sub.fmt)}<span>${esc(planTxt)}</span></div>
+      </div>
+      ${sparkline(serie.map(x => x.v), sub.mejor, serie.map(x => x.sem), sub.fmt)}`;
+    g.appendChild(card);
+  });
+  pane.appendChild(g);
+
+  const ley = el("div", "rk-leg");
+  ley.innerHTML = `<span><i style="background:#059669"></i>Tercio alto (mejor)</span>
+    <span><i style="background:#d97706"></i>Tercio medio</span>
+    <span><i style="background:#e11d48"></i>Tercio bajo (oportunidad)</span>`;
+  pane.appendChild(ley);
+
+  /* posición semana a semana, contra la posición acumulada del periodo */
+  const semanas = weeksOf("rank").filter(w => w <= sem);
+  const serieSem = semanas.map(w => {
+    const r = rowsAt("rank", w, lvl).filter(x => rankFilter(x, ci))[0];
+    return r ? r[ci.rank] : null;
+  });
+  const acum = rankAcumulado(lvl, semanas);
+  const box = chartBox("Posición nacional · " + scopeName(),
+    lg("Semanal", "#0284c7", 0) + lg("Acumulado", "#d97706", 1));
+  box.style.marginTop = "13px";
+  pane.appendChild(box);
+  box._draw = () => lineChart($(".plot", box), {
+    labels: semanas.map(w => "S" + w), fmt: "rank", invert: true, h: 300,
+    series: [{ name: "Semanal", color: "#0284c7", fill: true, values: serieSem },
+             { name: "Acumulado", color: "#d97706", dash: true, values: acum }]
+      .filter((_, i) => !box._ocultas.has(i))
+  });
+  CHARTS.push(box);
+}
+
 function rankFilter(r, ci) {
   if (r[ci.tipo] !== ST.rankTipo) return false;
   if (r[ci.cart] !== ST.rankCart) return false;
@@ -1892,6 +2065,8 @@ function renderIndicator(pane, cfg) {
     }));
   });
   pane.appendChild(kg);
+  if (cfg.id === "rank") renderRankTarjetas(pane, cfg, extra);
+
   if (cfg.id === "rank" && selLvl() === 0) {
     const n = el("div", "card");
     n.innerHTML = `<div style="font-size:12px;color:var(--txt3);line-height:1.6">
@@ -1908,7 +2083,7 @@ function renderIndicator(pane, cfg) {
   const anchas = el("div", "grid");
   const wsel = new Set(selWeeks());
   cfg.charts.forEach(ch => {
-    const box = chartBox(ch.t, ch.s.map((s, i) => lg(s.n, s.color || PAL[i % PAL.length])).join(""));
+    const box = chartBox(ch.t, ch.s.map((s, i) => lg(s.n, s.color || PAL[i % PAL.length], i)).join(""));
     (ch.ancha ? anchas : cg).appendChild(box);
     const cds = ch.ds || ds;                       // permite tomar datos de otro indicador
     const cExtra = cds === ds ? extra : null;
@@ -1922,7 +2097,7 @@ function renderIndicator(pane, cfg) {
       series: ch.s.map((s, i) => ({
         name: s.n, color: s.color || PAL[i % PAL.length], fill: s.fill, dash: s.dash, type: s.type,
         values: labels.map(w => { const f = data[i].find(x => x.sem === w); return f ? f.v : null; })
-      }))
+      })).filter((_, i) => !box._ocultas.has(i))
     });
     CHARTS.push(box);
   });
@@ -2080,14 +2255,23 @@ function renderHeat(pane, cfg, extra) {
         ${hayGes ? `<button data-v="ges"${st.modo === "ges" ? ' class="on"' : ""}>Por gestor</button>` : ""}
       </div>
       <div style="flex:1"></div>
-      <button class="hbtn" id="heatOrden" style="padding:4px 11px;font-size:11.5px"
-        title="Cambia el orden de los renglones">${st.peor ? "▲ Mejores" : "▼ Peores"}</button>
       <button class="hbtn" id="heatCsv" style="padding:4px 11px;font-size:11.5px">CSV</button>
     </div><div id="heatPlot"></div>`;
   pane.appendChild(box);
 
   let filas = heatRows(cfg, st.modo, met, weeks, extra, lvl);
-  if (st.peor) filas = filas.slice().reverse();
+  /* orden: por omisión el promedio con lo mejor arriba; al hacer clic en un
+     encabezado se ordena por esa semana, de mayor a menor y luego al revés */
+  const menorEsMejor = met.good != null ? met.good < met.bad : met.dir === "down";
+  if (!st.orden) st.orden = { col: "prom", dir: menorEsMejor ? 1 : -1 };
+  const valCol = (r, c) => c === "prom" ? r._p : r.vals[c];
+  filas = filas.slice().sort((a, b) => {
+    const x = valCol(a, st.orden.col), y = valCol(b, st.orden.col);
+    if (x == null && y == null) return 0;
+    if (x == null) return 1;
+    if (y == null) return -1;
+    return (x - y) * st.orden.dir;
+  });
   const TOPE = 150, mostradas = filas.slice(0, TOPE);
   heatmap($("#heatPlot", box), {
     weeks, rows: mostradas, fmt: met.fmt, bad: met.bad, good: met.good, dir: met.dir,
@@ -2096,16 +2280,22 @@ function renderHeat(pane, cfg, extra) {
     nota: (filas.length > TOPE ? `Se muestran ${TOPE} de ${filas.length} · ` : "") +
       (st.modo === "ges" && DB.meta && weeks[0] < DB.meta.ges_min
         ? `el detalle por gestor existe desde la S${DB.meta.ges_min} · ` : "") +
-      (st.peor ? "ordenado de peor a mejor promedio" : "ordenado de mejor a peor promedio"),
-    onRow: st.modo === "geo" && lvl > selLvl() ? name => drillTo(lvl, name) : null
+      "clic en un encabezado para ordenar por esa semana",
+    onRow: st.modo === "geo" && lvl > selLvl() ? name => drillTo(lvl, name) : null,
+    orden: st.orden,
+    onOrden: c => {
+      /* mismo encabezado: se invierte. Otro: arranca de mayor a menor */
+      st.orden = st.orden.col === c ? { col: c, dir: -st.orden.dir } : { col: c, dir: -1 };
+      render();
+    }
   });
 
-  $("#heatMet", box).onchange = e => { st.f = e.target.value; render(); };
-  $("#heatOrden", box).onclick = () => { st.peor = !st.peor; render(); };
+  $("#heatMet", box).onchange = e => { st.f = e.target.value; st.orden = null; render(); };
   $$("#heatNivel button", box).forEach(b => b.onclick = () => {
     const v = b.dataset.v;
     if (v === "ges") { st.modo = "ges"; st.f = (cfg.heat.ges || [])[0].f; }
     else { st.modo = "geo"; st.lvl = +v; if (!cfg.heat.geo.some(m => m.f === st.f)) st.f = cfg.heat.geo[0].f; }
+    st.orden = null;
     render();
   });
   $("#heatCsv", box).onclick = () => {
@@ -2322,7 +2512,7 @@ function renderDiscDia(pane) {
     { t: "Gestores con actividad", fmt: "num", zero: true,
       s: [{ f: "gestores", n: "Gestores", type: "bar" }] }
   ].forEach(ch => {
-    const box = chartBox(ch.t, ch.s.map((s, i) => lg(s.n, s.color || PAL[i % PAL.length])).join(""));
+    const box = chartBox(ch.t, ch.s.map((s, i) => lg(s.n, s.color || PAL[i % PAL.length], i)).join(""));
     cg.appendChild(box);
     box._draw = () => lineChart($(".plot", box), {
       labels: ultimos.map(d => d.slice(8) + "/" + d.slice(5, 7)), xlabel: "Día",
@@ -2330,7 +2520,7 @@ function renderDiscDia(pane) {
       series: ch.s.map((s, i) => ({
         name: s.n, color: s.color || PAL[i % PAL.length], fill: s.fill, type: s.type,
         values: ultimos.map(d => { const r = filaDia(d, selLvl()); return r ? val("discd", r, s.f) : null; })
-      }))
+      })).filter((_, i) => !box._ocultas.has(i))
     });
     CHARTS.push(box);
   });
@@ -3521,7 +3711,10 @@ async function saveProgress() {
   downloadBlob(body, nombre, ext === "avances" ? "application/octet-stream" : "text/plain");
   try { await idbPut("chunks", STORED); await idbPut("geo", GEO); IDB_OK = true; } catch (e) { IDB_OK = false; }
   if (ext === "avances") {
-    toast("avances.enc listo · cifrado · súbelo al repositorio para verlo en todos tus equipos", 5000);
+    /* el navegador le añade -1, -2… si ya existe uno igual, y entonces el sitio no
+       lo encuentra: por eso se insiste en el nombre exacto */
+    toast("avances.enc listo y cifrado. Súbelo al repositorio con ese nombre EXACTO: " +
+      "si tu equipo lo guardó como avances-1.enc o avances (1).enc, renómbralo antes de subirlo.", 9000);
   } else if (typeof RAWB64 === "string") {
     toast("Avances guardados (" + weeks.length + " semana[s]). Este archivo NO va cifrado: sirve para " +
       "pasarlo entre tus navegadores, pero no lo subas al repositorio.", 7000);
@@ -4013,7 +4206,19 @@ function pedirClave(bytes, msg) {
     $("#loader").style.display = "none";
   } catch (e) {
     console.error(e);
-    msg.innerHTML = "No se pudo iniciar: " + esc(e.message);
+    /* Abrir esta versión con doble clic no funciona: el navegador bloquea la
+       descarga de los datos en archivos locales. Conviene decirlo con claridad. */
+    const local = location.protocol === "file:";
+    msg.innerHTML = local
+      ? `<div style="max-width:430px;line-height:1.65;text-align:center">
+           <b style="font-size:15px">Esta versión necesita estar publicada</b><br>
+           La abriste con doble clic desde tu carpeta, y así el navegador no deja
+           descargar el histórico.<br><br>
+           Para verla sin internet usa el archivo
+           <b>Torre de Control&nbsp;-&nbsp;Indicadores Semanales.html</b>, que lleva
+           todo adentro. Esta otra es la del sitio.
+         </div>`
+      : "No se pudo iniciar: " + esc(e.message);
   }
 })();
 
