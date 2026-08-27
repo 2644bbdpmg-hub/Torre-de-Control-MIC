@@ -3846,7 +3846,8 @@ function buildWeekSelector() {
   $("#semLabel").textContent = weeksLabel();
   $("#subtitle").textContent = weeksLabel() + " · " + ALLWEEKS.length +
     " semanas de historia · datos al " + DB.meta.gen +
-    (AV_INFO && AV_INFO.semanas ? " · avances compartidos S" + AV_INFO.semanas.join(", S") : "");
+    (AV_INFO && AV_INFO.semanas ? " · avances compartidos S" + AV_INFO.semanas.join(", S") : "") +
+    " · app " + APP_VER;
 }
 
 function drawWeekPanel() {
@@ -3879,7 +3880,8 @@ function applyWeeks() {
   $("#semLabel").textContent = weeksLabel();
   $("#subtitle").textContent = weeksLabel() + " · " + ALLWEEKS.length +
     " semanas de historia · datos al " + DB.meta.gen +
-    (AV_INFO && AV_INFO.semanas ? " · avances compartidos S" + AV_INFO.semanas.join(", S") : "");
+    (AV_INFO && AV_INFO.semanas ? " · avances compartidos S" + AV_INFO.semanas.join(", S") : "") +
+    " · app " + APP_VER;
   $("#semPop").classList.remove("on");
   render(); updateDataChip();
 }
@@ -4046,6 +4048,7 @@ function updateDataChip() {
 /* El histórico va en dos archivos para que ninguno rebase el límite de 25 MiB de
    GitHub: el general y el detalle por gestor. Cada uno se acepta dentro de data/
    o suelto en la raíz, porque al subirlos a mano es fácil que queden en cualquiera. */
+const APP_VER = "26.08.26-1313";   // lo sustituye build.py en cada compilación
 let AV_INFO = null;      // avances compartidos que se aplicaron al abrir
 let LLAVE_ACT = null;    // llave con la que se abrió el histórico
 const DATA_BASE = ["data/dataset.json.gz", "dataset.json.gz"];
@@ -4139,6 +4142,13 @@ function pedirClave(bytes, msg) {
       }
     };
     pwd.oninput = () => { err.textContent = ""; };
+  });
+}
+
+/* Sólo tiene sentido en el sitio publicado; con doble clic no aplica. */
+if (location.protocol === "https:" && "serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("sw.js").catch(() => {});
   });
 }
 
