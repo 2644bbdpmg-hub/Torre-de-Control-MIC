@@ -2931,11 +2931,22 @@ function detectWeek(name, type) {
 
 /* ------------------------------------------------------------ lectores */
 const SHEETOPTS = { tgo: null, pase: { sheets: ["REPORTE6", "Reporte"], sheetRows: 12000 },
-  disc: { sheets: ["Productividad Gestores"] }, rank: null,
+  disc: null,      /* se abre completo: la hoja se localiza por su contenido */ rank: null,
   plan: { sheets: ["Base"] }, ch: null };
 
-function sheetRows(wb, name) {
-  const ws = wb.Sheets[name];
+function sheetRows(wb, name, buscar) {
+  let ws = wb.Sheets[name];
+  /* Si la hoja cambió de nombre —ha pasado— se busca la primera que contenga lo
+     que espera el lector, en vez de fallar con "no se encontró el encabezado". */
+  if (!ws && buscar) {
+    for (const n of wb.SheetNames || []) {
+      const cand = wb.Sheets[n];
+      if (!cand) continue;
+      const fil = XLSX.utils.sheet_to_json(cand, { header: 1, raw: true, defval: null,
+                                                   blankrows: false, sheetRows: 60 });
+      if (fil.some(r => r && buscar(r))) { ws = cand; break; }
+    }
+  }
   if (!ws) return [];
   return XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null, blankrows: false });
 }
@@ -3238,13 +3249,17 @@ function parseDISCdias(rows, hdr, w, LY) {
   return [{ ds: "discd", week: w, rows: aggRows }, { ds: "discd_g", week: w, rows: gRows }];
 }
 
+const esCabDisc = r => r.some(c => /^divisi[óo]n$/i.test(String(c == null ? "" : c).trim()));
+
 function parseDISC(wb, w) {
-  const rows = sheetRows(wb, "Productividad Gestores");
+  const rows = sheetRows(wb, "Productividad Gestores", esCabDisc);
+  if (!rows.length) throw new Error("El archivo no trae la hoja de Productividad Gestores (¿está vacío o abierto en Excel?)");
   let hdr = -1;
   for (let i = 0; i < Math.min(60, rows.length); i++) {
-    const r = rows[i]; if (r && T(r[0]).toLowerCase() === "división") { hdr = i; break; }
+    const r = rows[i];
+    if (r && esCabDisc(r)) { hdr = i; break; }
   }
-  if (hdr < 0) throw new Error("No se encontró el encabezado");
+  if (hdr < 0) throw new Error("No se encontró la fila de encabezados (División, Franquicia, Región…)");
   const LY = layoutDISC(rows, hdr), I = LY.id, S = LY.sem;
   const cel = (r, c) => (c == null ? null : r[c]);
   const recs = [];
@@ -4095,7 +4110,7 @@ function updateDataChip() {
 /* El histórico va en dos archivos para que ninguno rebase el límite de 25 MiB de
    GitHub: el general y el detalle por gestor. Cada uno se acepta dentro de data/
    o suelto en la raíz, porque al subirlos a mano es fácil que queden en cualquiera. */
-const APP_VER = "26.09.07-1706";   // lo sustituye build.py en cada compilación
+const APP_VER = "26.09.07-1720";   // lo sustituye build.py en cada compilación
 let AV_INFO = null;      // avances compartidos que se aplicaron al abrir
 let LLAVE_ACT = null;    // llave con la que se abrió el histórico
 const DATA_BASE = ["data/dataset.json.gz", "dataset.json.gz"];
