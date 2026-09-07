@@ -404,9 +404,9 @@ tbody tr.clickable{cursor:pointer}
     <div class="body">
       <div class="drop" id="drop">
         <div style="font-size:26px;margin-bottom:6px">📄</div>
-        <div><b>Arrastra aquí</b> los archivos .xlsx / .xlsm — o haz clic para elegirlos</div>
+        <div><b>Arrastra aquí</b> los archivos .xlsx / .xlsm / .xlsb — o haz clic para elegirlos</div>
         <div class="note" style="margin-top:8px">TGO MIC · Pase 6 a 7 · Disciplina Operativa · Rank · Plan de Cobranza · Indicadores CH</div>
-        <input type="file" id="fileInput" multiple accept=".xlsx,.xlsm,.xls" style="display:none">
+        <input type="file" id="fileInput" multiple accept=".xlsx,.xlsm,.xls,.xlsb,.neza,.enc" style="display:none">
       </div>
       <div class="bar" id="upBar" style="display:none"><i></i></div>
       <div class="filelist" id="fileList"></div>
@@ -2908,7 +2908,7 @@ const FIELDS = ds => DB[ds].cols.slice(6);
 function detectType(name, sheets) {
   const n = name.toLowerCase();
   if (/tgo\s*mic/.test(n) || sheets.includes("TGO")) return "tgo";
-  if (/pase de 6/.test(n) || sheets.includes("REPORTE6")) return "pase";
+  if (/pase de 6/.test(n) || /detalle de pases/.test(n) || sheets.includes("REPORTE6")) return "pase";
   if (/disciplina/.test(n) || sheets.includes("Productividad Gestores")) return "disc";
   if (/^rank|rank indicadores/.test(n) || sheets.includes("Rank Semanal")) return "rank";
   if (/plan de cobranza/.test(n)) return "plan";
@@ -2929,7 +2929,7 @@ function detectWeek(name, type) {
 }
 
 /* ------------------------------------------------------------ lectores */
-const SHEETOPTS = { tgo: null, pase: { sheets: ["REPORTE6"], sheetRows: 2200 },
+const SHEETOPTS = { tgo: null, pase: { sheets: ["REPORTE6", "Reporte"], sheetRows: 12000 },
   disc: { sheets: ["Productividad Gestores"] }, rank: null,
   plan: { sheets: ["Base"] }, ch: null };
 
@@ -3011,7 +3011,52 @@ function parseTGO(wb, w) {
 }
 
 /* ---------- PASE 6 a 7 ---------- */
+/* El reporte cambió de formato en la S36: pasó a .xlsb, la hoja se llama "Reporte",
+   al cuartel le dicen franquicia, la división viene con el prefijo "DIVISION " y el
+   archivo trae juntos los atrasos 6, 9 y 13. El indicador de Pase 6 → 7 es el
+   bloque de atraso 6, que tiene exactamente las mismas columnas de siempre. */
+const PASE_NIV = { PAIS: 0, DIVISION: 1, CUARTEL: 2, FRANQUICIA: 2, REGION: 3, GERENCIA: 4 };
+const sinPrefijoDiv = t => String(t || "").replace(/^\s*DIVISI[ÓO]N\s+/i, "").trim();
+
+function parsePASEnuevo(wb, w, atraso) {
+  const rows = sheetRows(wb, "Reporte");
+  if (!rows.length) throw new Error("La hoja Reporte viene vacía");
+  const H = rows[0].map(x => String(x == null ? "" : x).trim().toUpperCase());
+  const col = n => H.indexOf(n);
+  const c = { at: col("ATRASO"), niv: col("NIVEL"), ger: col("GERENCIA"), reg: col("REGION"),
+              fra: col("FRANQUICIA"), div: col("DIVISION") };
+  if (c.at < 0 || c.niv < 0) throw new Error("La hoja Reporte no trae ATRASO y NIVEL");
+  const mapa = { cartera6: "CARTERA_INICIO_SEMANA", pase_riesgo: "PASE_RIESGO",
+    p_pase_riesgo: "P_PASE_RIESGO", cart_pase: "PASE", p_pase: "P_PASE",
+    cart_riesgo: "RIESGO", p_riesgo: "P_RIESGO", contencion: "CONTENCION",
+    p_contencion: "P_CONTENCION", liquidado: "LIQUIDADO", p_liquidado: "P_LIQUIDADO",
+    regreso: "REGRESO", p_regreso: "P_REGRESO" };
+  const ci = IX.pase, out = [];
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i]; if (!r) continue;
+    if (N(r[c.at]) !== atraso) continue;
+    const lvl = PASE_NIV[T(r[c.niv]).toUpperCase()];
+    if (lvl == null) continue;                       // GESTOR y demás quedan fuera
+    const row = new Array(ci ? DB.pase.cols.length : 0).fill(null);
+    row[ci.sem] = w; row[ci.lvl] = lvl;
+    const gPase = CG(NG(r[c.ger]));
+    const uPase = UB(sinPrefijoDiv(NG(r[c.div])), NG(r[c.fra]), CR(NG(r[c.reg])), gPase);
+    row[ci.div] = gidx(uPase[0]); row[ci.cua] = gidx(uPase[1]);
+    row[ci.reg] = gidx(uPase[2]); row[ci.ger] = gidx(gPase);
+    Object.entries(mapa).forEach(([campo, cab]) => {
+      const j = col(cab);
+      if (j >= 0 && ci[campo] != null) row[ci[campo]] = N(r[j]);
+    });
+    out.push(row);
+  }
+  if (!out.length) throw new Error("Sin filas de atraso " + atraso + " en la hoja Reporte");
+  out.sort((a, b) => a[ci.lvl] - b[ci.lvl]);
+  return [{ ds: "pase", week: w, rows: out }];
+}
+
 function parsePASE(wb, w) {
+  if (!wb.SheetNames.includes("REPORTE6") && wb.SheetNames.includes("Reporte"))
+    return parsePASEnuevo(wb, w, 6);
   const rows = sheetRows(wb, "REPORTE6");
   const lvlmap = { PAIS: 0, DIVISION: 1, CUARTEL: 2, REGION: 3, GERENCIA: 4 };
   const ci = IX.pase, out = [];
@@ -3756,7 +3801,7 @@ function initUpload() {
   $("#btnCloseUp").onclick = () => { modal.classList.remove("on"); };
   modal.addEventListener("click", e => { if (e.target === modal) modal.classList.remove("on"); });
   drop.onclick = () => inp.click();
-  inp.accept = ".xlsx,.xlsm,.xls,.neza";
+  inp.accept = ".xlsx,.xlsm,.xls,.xlsb,.neza,.enc";
   ["dragenter", "dragover"].forEach(ev => drop.addEventListener(ev, e => {
     e.preventDefault(); drop.classList.add("hot");
   }));
@@ -4048,7 +4093,7 @@ function updateDataChip() {
 /* El histórico va en dos archivos para que ninguno rebase el límite de 25 MiB de
    GitHub: el general y el detalle por gestor. Cada uno se acepta dentro de data/
    o suelto en la raíz, porque al subirlos a mano es fácil que queden en cualquiera. */
-const APP_VER = "26.08.26-1313";   // lo sustituye build.py en cada compilación
+const APP_VER = "26.09.07-1649";   // lo sustituye build.py en cada compilación
 let AV_INFO = null;      // avances compartidos que se aplicaron al abrir
 let LLAVE_ACT = null;    // llave con la que se abrió el histórico
 const DATA_BASE = ["data/dataset.json.gz", "dataset.json.gz"];
