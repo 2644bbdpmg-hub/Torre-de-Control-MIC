@@ -2824,7 +2824,8 @@ function SEC(v) {
 function NG(s) {  /* normaliza geografía */
   let x = T(s).toUpperCase();
   x = x.replace("DIVISION COBRANZA ", "").replace("DIVISIÓN ", "").replace("DIVISION ", "");
-  x = x.replace("CUARTEL ", "").replace("REGIONAL COBRANZA ", "").replace("REGIONAL CARTERA VENCIDA ", "");
+  x = x.replace("CUARTEL ", "").replace("FRANQUICIA ", "")
+       .replace("REGIONAL COBRANZA ", "").replace("REGIONAL CARTERA VENCIDA ", "");
   return x.replace(/\s+/g, " ").trim();
 }
 /* CH antepone "RELACIONAL" a la misma región que usan las demás fuentes */
@@ -3088,7 +3089,8 @@ const NH = s => String(s == null ? "" : s).toLowerCase()
 
 const DISC_ID = [
   ["div",     h => h === "division"],
-  ["cua",     h => h === "cuartel"],
+  /* desde la S36 al cuartel le dicen franquicia */
+  ["cua",     h => h === "cuartel" || h === "franquicia"],
   ["reg",     h => h === "region"],
   ["ger",     h => h === "gerencia"],
   ["ne",      h => h.replace(/\./g, "").startsWith("no empleado")],
@@ -3297,7 +3299,7 @@ function parseDISC(wb, w) {
 
 /* ---------- RANK (lectura por encabezado: el layout cambia entre semanas) ---------- */
 const RANK_BLOCKS = { "NACIONAL": [0, "R"], "TOTAL MIC": [0, "R"], "MIC": [0, "R"],
-  "DIVISIÓN": [1, "R"], "DIVISION": [1, "R"], "CUARTEL": [2, "R"],
+  "DIVISIÓN": [1, "R"], "DIVISION": [1, "R"], "CUARTEL": [2, "R"], "FRANQUICIA": [2, "R"],
   "REGIONAL RELACIONAL": [3, "R"], "GERENCIA RELACIONAL": [4, "R"],
   "REGIONAL VENCIDA": [3, "V"], "GERENCIA VENCIDA": [4, "V"] };
 const RANK_SUB = { "reserva": "reserva", "cartera": "cartera", "plantilla": "plantilla",
@@ -4093,7 +4095,7 @@ function updateDataChip() {
 /* El histórico va en dos archivos para que ninguno rebase el límite de 25 MiB de
    GitHub: el general y el detalle por gestor. Cada uno se acepta dentro de data/
    o suelto en la raíz, porque al subirlos a mano es fácil que queden en cualquiera. */
-const APP_VER = "26.09.07-1649";   // lo sustituye build.py en cada compilación
+const APP_VER = "26.09.07-1706";   // lo sustituye build.py en cada compilación
 let AV_INFO = null;      // avances compartidos que se aplicaron al abrir
 let LLAVE_ACT = null;    // llave con la que se abrió el histórico
 const DATA_BASE = ["data/dataset.json.gz", "dataset.json.gz"];
