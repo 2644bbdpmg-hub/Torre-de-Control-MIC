@@ -1257,7 +1257,22 @@ function heatmap(host, def) {
     if (def.dir === "down") { bad = hi; good = lo; } else { bad = lo; good = hi; }
   }
   const rg = (good - bad) || 1;
-  const t = v => (v - bad) / rg;
+  /* porColumna: cada columna se compara consigo misma. Sirve cuando las columnas
+     miden cosas de magnitud distinta y lo que importa es quién destaca en cada una. */
+  const escCol = [];
+  if (def.porColumna) {
+    for (let c = 0; c < W.length; c++) {
+      const v = def.rows.map(r => r.vals[c]).filter(x => x != null);
+      if (!v.length) { escCol.push(null); continue; }
+      const lo = Math.min(...v), hi = Math.max(...v);
+      escCol.push(def.dir === "down" ? { b: hi, g: lo } : { b: lo, g: hi });
+    }
+  }
+  const t = (v, c) => {
+    const e = def.porColumna ? escCol[c] : null;
+    if (e) return (v - e.b) / ((e.g - e.b) || 1);
+    return (v - bad) / rg;
+  };
 
   const prom = r => {
     const v = r.vals.filter(x => x != null);
@@ -1265,16 +1280,18 @@ function heatmap(host, def) {
   };
   const filas = def.rows.map(r => {
     const celdas = r.vals.map((v, i) => {
-      if (v == null) return '<td class="hc vacia" title="S' + W[i] + ' · sin dato">·</td>';
-      const e = heatEscalon(t(v));
+      const etq = def.etqCol ? def.etqCol(W[i]) : "S" + W[i];
+      if (v == null) return '<td class="hc vacia" title="' + esc(etq) + ' · sin dato">·</td>';
+      const e = heatEscalon(t(v, i));
       return `<td class="hc" style="background:${e[0]};color:${e[1]}"
-        title="S${W[i]} · ${esc(r.name)}: ${fmt(v, fmt_)}">${fmt(v, fmt_)}</td>`;
+        title="${esc(etq)} · ${esc(r.name)}: ${fmt(v, fmt_)}">${fmt(v, fmt_)}</td>`;
     }).join("");
-    const p = prom(r);
+    const p = def.sinProm ? null : prom(r);
     return `<tr${def.onRow ? ' class="clickable" data-n="' + esc(r.name) + '"' : ""}>
       <td class="hn"><b>${esc(r.name)}</b>${r.sub ? `<span class="hsub">${esc(r.sub)}</span>` : ""}</td>
       ${celdas}
-      <td class="hp">${p == null ? "—" : fmt(p, fmt_)}</td></tr>`;
+      ${def.sinProm ? (def.colFinal ? `<td class="hp">${esc(def.colFinal(r))}</td>` : "")
+                    : `<td class="hp">${p == null ? "—" : fmt(p, fmt_)}</td>`}</tr>`;
   }).join("");
 
   /* encabezados ordenables: cada semana y el promedio */
@@ -1284,8 +1301,12 @@ function heatmap(host, def) {
   host.innerHTML = `<div class="tscroll heatwrap"><table class="heat">
       <thead><tr><th class="hn">${esc(def.titFila || "")}</th>
         ${W.map((w, i) => `<th class="${clase(i)}" data-c="${i}"
-          title="Ordenar por la semana ${w}">S${w}${flecha(i)}</th>`).join("")}
-        <th class="hp ${clase("prom")}" data-c="prom" title="Ordenar por el promedio">Prom.${flecha("prom")}</th></tr></thead>
+          title="Ordenar por ${def.etqCol ? esc(def.etqCol(w)) : "la semana " + w}"
+          >${def.etqCol ? esc(def.etqCol(w)) : "S" + w}${flecha(i)}</th>`).join("")}
+        ${def.sinProm ? (def.titFinal ? `<th class="hp ${clase("prom")}" data-c="prom"
+            title="Ordenar por el total">${esc(def.titFinal)}${flecha("prom")}</th>` : "")
+          : `<th class="hp ${clase("prom")}" data-c="prom"
+          title="Ordenar por el promedio">Prom.${flecha("prom")}</th>`}</tr></thead>
       <tbody>${filas}</tbody></table></div>
     <div class="heatleg">
       <span>${esc(def.etqBajo || "Peor")}</span>
@@ -1449,8 +1470,8 @@ function activarLeyenda(box) {
 /* helpers de nivel */
 function levelField(lvl) { return ["", "div", "cua", "reg", "ger"][lvl]; }
 
-function childRows(ds, sem, extraFilter) {
-  const lvl = childLvl(), ci = IX[ds];
+function childRows(ds, sem, extraFilter, nivel) {
+  const lvl = nivel == null ? childLvl() : nivel, ci = IX[ds];
   const rs = rowsSel(ds, lvl, extraFilter, sem == null ? null : (Array.isArray(sem) ? sem : [sem]));
   const f = levelField(lvl);
   return rs.map(r => ({ row: r, name: GEO[r[ci[f]]] || "—" })).filter(x => x.name && x.name !== "—");
@@ -2104,6 +2125,9 @@ function renderIndicator(pane, cfg) {
   if (anchas.children.length) pane.appendChild(anchas);
   pane.appendChild(cg);
 
+  /* Cobranza por segmento de atraso */
+  renderSegmentos(pane, cfg, extra);
+
   /* Mapa de calor de las últimas semanas */
   if (cfg.heat) renderHeat(pane, cfg, extra);
 
@@ -2165,6 +2189,98 @@ function renderIndicator(pane, cfg) {
       });
     }
   }
+}
+
+/* ---------------------------------------------------------------- SEGMENTOS
+   Cobranza por segmento de atraso. Cada renglón es una entidad y cada columna un
+   segmento; el color compara dentro de cada columna, para ver quién cobra más y
+   quién menos en ese tramo. */
+const SEGMENTOS = [
+  { f: "c12", l: "1 a 2" }, { f: "c3", l: "3" },
+  { f: "c46", l: "4 a 6" }, { f: "c79", l: "7 a 9" }
+];
+
+function renderSegmentos(pane, cfg, extra) {
+  if (cfg.id !== "tgo") return;
+  ST.seg = ST.seg || { modo: "mix", lvl: null };
+  const st = ST.seg;
+  const niveles = [];
+  for (let k = childLvl(); k <= 4; k++) niveles.push(k);
+  if (st.lvl == null || !niveles.includes(st.lvl)) st.lvl = niveles[0];
+  const lvl = st.lvl;
+
+  const filas = childRows(cfg.ds, null, extra, lvl)
+    .map(x => {
+      const tot = val(cfg.ds, x.row, "cob_seg");
+      return {
+        name: x.name,
+        tot,
+        vals: SEGMENTOS.map(sg => st.modo === "mix"
+          ? val(cfg.ds, x.row, "p_" + sg.f)
+          : val(cfg.ds, x.row, sg.f))
+      };
+    })
+    .filter(r => r.vals.some(v => v != null));
+  if (!filas.length) return;
+
+  pane.appendChild(sectionTitle("Cobranza por segmento de atraso",
+    "Del detalle por gestor · " + weeksLabel().toLowerCase() + " · " + scopeName()));
+
+  const box = el("div", "tablewrap");
+  box.innerHTML = `<div class="heatbar">
+      <span class="t">${st.modo === "mix" ? "Reparto de la cobranza" : "Importe cobrado"}</span>
+      <div class="seg" id="segModoS">
+        <button data-v="mix"${st.modo === "mix" ? ' class="on"' : ""}>% del total</button>
+        <button data-v="imp"${st.modo === "imp" ? ' class="on"' : ""}>Importe</button>
+      </div>
+      <div class="seg" id="segNivel">
+        ${niveles.map(k => `<button data-v="${k}"${st.lvl === k ? ' class="on"' : ""}
+          >Por ${esc(LVLNAME[k].toLowerCase())}</button>`).join("")}
+      </div>
+      <div style="flex:1"></div>
+      <button class="hbtn" id="segCsv" style="padding:4px 11px;font-size:11.5px">CSV</button>
+    </div><div id="segPlot"></div>`;
+  pane.appendChild(box);
+
+  /* orden: por omisión el total cobrado; al hacer clic, por el segmento elegido */
+  if (!st.orden) st.orden = { col: "prom", dir: -1 };
+  const valCol = (r, c) => c === "prom" ? r.tot : r.vals[c];
+  filas.sort((a, b) => {
+    const x = valCol(a, st.orden.col), y = valCol(b, st.orden.col);
+    if (x == null && y == null) return 0;
+    if (x == null) return 1;
+    if (y == null) return -1;
+    return (x - y) * st.orden.dir;
+  });
+  const TOPE = 150;
+  heatmap($("#segPlot", box), {
+    weeks: SEGMENTOS.map(s => s.l),
+    etqCol: l => l,
+    rows: filas.slice(0, TOPE),
+    fmt: st.modo === "mix" ? "pct" : "moneyK",
+    dir: "up", porColumna: true,
+    sinProm: true, titFinal: "Total",
+    colFinal: r => fmt(r.tot, "moneyK"),
+    orden: st.orden,
+    onOrden: c => {
+      st.orden = st.orden.col === c ? { col: c, dir: -st.orden.dir } : { col: c, dir: -1 };
+      render();
+    },
+    titFila: LVLNAME[lvl],
+    etqBajo: "Menos cobra", etqAlto: "Más cobra",
+    nota: (filas.length > TOPE ? `Se muestran ${TOPE} de ${filas.length} · ` : "") +
+      "el color compara dentro de cada segmento",
+    onRow: lvl > selLvl() ? name => drillTo(lvl, name) : null
+  });
+
+  $$("#segModoS button", box).forEach(b => b.onclick = () => { st.modo = b.dataset.v; render(); });
+  $$("#segNivel button", box).forEach(b => b.onclick = () => { st.lvl = +b.dataset.v; st.orden = null; render(); });
+  $("#segCsv", box).onclick = () => {
+    const cab = [LVLNAME[lvl]].concat(SEGMENTOS.map(s => s.l)).concat(["Total"]);
+    bajarCSV([cab].concat(filas.map(r => [r.name].concat(r.vals.map(v => v == null ? "" : v))
+      .concat([r.tot == null ? "" : r.tot]))),
+      ("cobranza por segmento " + scopeName()).replace(/[^\w áéíóúñ-]/gi, ""));
+  };
 }
 
 /* ====================================================================== */
@@ -2979,11 +3095,16 @@ function parseTGO(wb, w) {
     if (x.indirecta != null) a[1] += x.indirecta;
     di.set(k, a);
   });
-  /* gestores por rango de alcance: se cuentan del propio detalle por empleado */
-  const rng = new Map();
+  /* gestores por rango de alcance y cobranza por segmento de atraso: las dos cosas
+     sólo vienen en el detalle por empleado, así que se suman a su gerencia */
+  const rng = new Map(), seg = new Map();
+  const SEG = ["c12", "c3", "c46", "c79"];
   em.forEach(x => {
-    if (x.cob_alc == null) return;
     const k = [x.div, x.cua, x.reg, x.ger].join("|");
+    const t = seg.get(k) || [0, 0, 0, 0];
+    SEG.forEach((f, j) => { if (x[f] != null) t[j] += x[f]; });
+    seg.set(k, t);
+    if (x.cob_alc == null) return;
     const b = rng.get(k) || [0, 0, 0, 0, 0];
     b[0]++;
     b[x.cob_alc < 0.8 ? 1 : x.cob_alc < 0.85 ? 2 : x.cob_alc < 1 ? 3 : 4]++;
@@ -2995,6 +3116,8 @@ function parseTGO(wb, w) {
     if (a) { x.directa = Math.round(a[0] * 100) / 100; x.indirecta = Math.round(a[1] * 100) / 100; }
     const b = rng.get(k);
     if (b) { x.alc_medible = b[0]; x.r80 = b[1]; x.r8085 = b[2]; x.r85100 = b[3]; x.r100 = b[4]; }
+    const t = seg.get(k);
+    if (t) SEG.forEach((f, j) => { x[f] = Math.round(t[j] * 100) / 100; });
   });
   const agg = aggregate(eq, {
     sums: ["pl_esp","pl_real","cob_req","cob_meta","cob_real","c12","c3","c46","c79","directa",
@@ -3007,6 +3130,11 @@ function parseTGO(wb, w) {
       o.p_directa = tot ? Math.round((o.directa || 0) / tot * 1e4) / 1e4 : null;
       o.p_riesgo = o.alc_medible
         ? Math.round(((o.r80 || 0) + (o.r8085 || 0)) / o.alc_medible * 1e4) / 1e4 : null;
+      const ts = (o.c12 || 0) + (o.c3 || 0) + (o.c46 || 0) + (o.c79 || 0);
+      o.cob_seg = ts || null;
+      ["c12", "c3", "c46", "c79"].forEach(f => {
+        o["p_" + f] = ts ? Math.round((o[f] || 0) / ts * 1e4) / 1e4 : null;
+      });
     }, fields: FIELDS("tgo")
   });
   const gi = IX.tgo_g;
@@ -4110,7 +4238,7 @@ function updateDataChip() {
 /* El histórico va en dos archivos para que ninguno rebase el límite de 25 MiB de
    GitHub: el general y el detalle por gestor. Cada uno se acepta dentro de data/
    o suelto en la raíz, porque al subirlos a mano es fácil que queden en cualquiera. */
-const APP_VER = "26.09.07-1720";   // lo sustituye build.py en cada compilación
+const APP_VER = "26.09.08-1924";   // lo sustituye build.py en cada compilación
 let AV_INFO = null;      // avances compartidos que se aplicaron al abrir
 let LLAVE_ACT = null;    // llave con la que se abrió el histórico
 const DATA_BASE = ["data/dataset.json.gz", "dataset.json.gz"];
